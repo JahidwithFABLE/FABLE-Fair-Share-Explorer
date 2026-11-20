@@ -674,8 +674,8 @@ def compare(repo,catalogue):
 
 def authenticated():
     token=setting("FABLE_ADMIN_TOKEN")
-    if len(token)<24:
-        st.info("Admin is disabled. Set a strong FABLE_ADMIN_TOKEN in your server settings.")
+    if len(token) < 8:
+        st.info("Admin is disabled. Set FABLE_ADMIN_TOKEN to at least 8 characters in your server settings.")
         return False
     current=sha256(token.encode()).hexdigest()
     session=st.session_state.get("admin_session")
