@@ -87,13 +87,10 @@ def table_for(rows, key, allow_download=True):
     st.caption("Signed gap is fixed allowance minus selected emissions. A negative gap means emissions exceeded the allowance. Blank relative gaps are undefined at near-zero net emissions.")
 
 def report_metrics(run):
-    a,b,c,d=st.columns(4)
-    year=run["period"][1]
-    year_value=run["annual"].get(str(year),run["annual"].get(year))
-    a.metric("Cumulative net AFOLU",f"{run['cumulative']/1000:,.2f} GtCO₂e")
-    b.metric(f"Annual net AFOLU in {year}",f"{year_value/1000:,.2f} GtCO₂e/yr")
-    c.metric("Fixed cumulative budget",f"{run['budget']/1000:,.2f} GtCO₂e")
-    d.metric("Participants",len(run["summary"]))
+    emissions, budget, participants = st.columns(3)
+    emissions.metric("Cumulative net AFOLU", f"{run['cumulative']/1000:,.2f} GtCO₂e")
+    budget.metric("Fixed cumulative budget", f"{run['budget']/1000:,.2f} GtCO₂e")
+    participants.metric("Participants", len(run["summary"]))
 
 def map_controls(key):
     left,right=st.columns(2)
@@ -321,17 +318,24 @@ def grouped_range_table(run, approaches, mode, key, full, allow_download):
 
     fields = (
         ("weight_pct", "Fair Share %", 2),
-        ("allowance", "Fixed allowance", 1),
-        ("gap", "Signed gap", 1),
+        ("allowance", "Fixed allowance", 0),
+        ("gap", "Signed gap", 0),
         ("relative_gap", "Relative gap %", 2),
     )
     variants = ("base", "adjusted") if mode == "range" else (mode,)
-    search, filters = st.columns([2, 3])
+    search, filters, order = st.columns([2, 3, 3])
     term = search.text_input("Find participant", placeholder="e.g. R_CAS",
                              key=key+"find").strip().upper()
     selection = filters.selectbox("Allowance filter", ("All participants",
                         "Above in any displayed variant", "Within in all displayed variants"),
                         key=key+"allowance_filter")
+
+    sort_by = order.selectbox(
+        "Sort by", ("Participant (A–Z)", "Largest absolute signed gap"),
+        key=key+"participant_order",
+        help="Ranks by the largest absolute signed gap across the selected approaches "
+             "and displayed Base or Adjusted values. Min–max considers both.",
+    )
 
     # Older published runs don't store the weights. Only show them if the
     # registered release matches the exact fingerprint saved with the result.
@@ -356,8 +360,17 @@ def grouped_range_table(run, approaches, mode, key, full, allow_download):
         f'<th scope="col" class="{"edge" if i == 0 else ""}">{label}</th>'
         for a in approaches for i, (_, label, _) in enumerate(fields)
     )
+    participants = sorted(run["summary"])
+    if sort_by == "Largest absolute signed gap":
+        participants.sort(
+            key=lambda pid: max(abs(run["table"][a][pid][v]["gap"])
+                                for a in approaches for v in variants),
+            reverse=True,
+        )
+
     body, exported = [], []
-    for pid, emissions in run["summary"].items():
+    for pid in participants:
+        emissions = run["summary"][pid]
         if term not in pid:
             continue
         lookup = {a: run["table"][a][pid] for a in approaches}
