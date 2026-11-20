@@ -12,6 +12,7 @@ import streamlit as st
 from model import (APPROACHES, MAX_UPLOAD_MB, difference, options, prepare_result,
                    read_report, release_for_app, rows_for, status)
 from repository import Repository
+from github_storage import GitHubRepository
 from publication import (EXPLORE, COMPARE, CROSSING, MOVED_IN, MOVED_OUT, public_views, shared_compare, crossing_rows, crossing_chart, map_link_data)
 from views import annual_chart, csv_bytes, delta_chart, index_chart, world_map, gap_svg, map_definitions
 
@@ -39,8 +40,10 @@ def setting(name, default=""):
         return default
 
 @st.cache_resource(show_spinner=False)
-def init_repository(data, dsn, version="final-v1"):
-    return Repository(Path(data) / "fair_share.sqlite3", dsn)
+def init_repository(data, dsn, storage, github_repo, github_token):
+    if storage == "github":
+        return GitHubRepository(github_repo, github_token)
+    return Repository(Path(data) / "fair_share.sqlite3", dsn if storage == "postgres" else "")
 
 @st.cache_resource(show_spinner=False)
 def releases():
@@ -166,7 +169,7 @@ def map_presentation(run, approaches, variant, field, limit, linked=False):
         f"<span>−{limit:g}{units} · Above</span><span>0 · At allowance</span>",
         f"<span>+{limit:g}{units} · Within</span></div>",
     ))
-    
+
     link_payload = map_link_data(run, variant, linked)
     definitions = ('<svg width="0" height="0" aria-hidden="true" class="geometry">'
                    '<defs>' + map_definitions() + '</defs></svg>')
@@ -701,7 +704,7 @@ def upload_panel(repo, catalog):
     title=st.text_input("Scenathon display name",value=titles.get(event,release.label),
                         max_chars=110,key="admin_title_"+event)
     st.caption(f"Fixed benchmark {release.benchmark.version} · {len(release.weights.participant_ids)} participants")
-    file=st.file_uploader("Scenathon report (.xlsx)",type=["xlsx"],max_upload_size=MAX_UPLOAD_MB,key="admin_book",
+    file=st.file_uploader("Scenathon report (.xlsx)",type=["xlsx"],max_upload_size=getattr(repo,"max_upload_mib",MAX_UPLOAD_MB),key="admin_book",
                           help="The app reads Indicators or Indicators Report. It does not use the Trade sheet.")
     if file is None:
         st.session_state.pop("upload_cache",None)
@@ -761,6 +764,9 @@ def upload_panel(repo, catalog):
         if preview and preview[0]==selection:
             run=preview[1]
             st.success(f"Private preview · {run['reporting_rows']} validated rows. The result is not public until you publish it.")
+            if getattr(repo,"public_git_archive",False):
+                st.caption("Publish also commits the original workbook and calculated results to public GitHub. "
+                           "Public-view settings only control what is shown in this app.")
             with st.expander("Choose what to publish", expanded=True):
                 visible = publication_controls(public_views(run), "draft_" + digest[:10] + "_")
                 if not visible["explore"]:
@@ -768,7 +774,7 @@ def upload_panel(repo, catalog):
             if st.button("Publish to public dashboard",type="primary",key="admin_publish",
                          disabled=not title.strip() or not visible["explore"]):
                 try:
-                    with st.spinner("Saving the results and private workbook…"):
+                    with st.spinner("Saving the results and original workbook…"):
                         run_id,created=repo.publish(title,run,file.name,file.getvalue(),visibility=visible)
                 except ValueError as exc:
                     st.error(str(exc))
@@ -809,7 +815,12 @@ def manage_panel(repo):
                     st.error("Could not save public views. The existing publication was unchanged.")
                 else:
                     st.success("Public views saved. No re-upload or republish needed.")
-    st.caption("The source workbook remains in the private database archive.")
+    if getattr(repo,"public_git_archive",False):
+        st.caption("Unpublishing hides the snapshot in this app. Its workbook and results remain in public GitHub.")
+    elif getattr(repo,"github_archive",False):
+        st.caption("The source workbook remains in the GitHub archive.")
+    else:
+        st.caption("The source workbook remains in the private database archive.")
 
 def admin(repo):
     st.subheader("Admin workspace")
@@ -831,11 +842,20 @@ def main():
     data=setting("FABLE_APP_DATA_DIR",str(Path(__file__).resolve().parent/"data"))
     dsn=setting("FABLE_DATABASE_URL").strip()
     hosted=setting("FABLE_HOSTED").strip().lower() in {"1","true","yes"}
-    if hosted and not dsn:
-        st.error("Hosted mode needs FABLE_DATABASE_URL for durable report and result storage.")
+    storage=setting("FABLE_STORAGE").strip().lower() or ("postgres" if dsn else "sqlite")
+    github_repo=setting("FABLE_GITHUB_REPOSITORY").strip() if storage == "github" else ""
+    github_token=setting("FABLE_GITHUB_TOKEN").strip() if storage == "github" else ""
+    if storage not in {"sqlite","postgres","github"}:
+        st.error("FABLE_STORAGE must be sqlite, postgres, or github.")
+        return
+    if (hosted and storage == "sqlite") or (storage == "postgres" and not dsn):
+        st.error("Hosted mode needs GitHub storage or a PostgreSQL URL.")
+        return
+    if storage == "github" and not (github_repo and github_token):
+        st.error("GitHub storage needs FABLE_GITHUB_REPOSITORY and FABLE_GITHUB_TOKEN in Secrets.")
         return
     try:
-        repo=init_repository(data,dsn)
+        repo=init_repository(data,dsn if storage == "postgres" else "",storage,github_repo,github_token)
         page=st.radio("Workspace",("Explore","Compare","Admin"),horizontal=True,
                       label_visibility="collapsed",key="workspace")
         cat=repo.catalogue() if page != "Admin" else ()
