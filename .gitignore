@@ -1,0 +1,17 @@
+.streamlit/secrets.toml
+.env
+.env.*
+data/
+*.db
+*.sqlite*
+*.xlsx
+*.xlsm
+*.xls
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+assets/world_shapes.json.gz
+FABLE_App_Backups/
+*.ipynb
