@@ -9,12 +9,13 @@ import time
 import pandas as pd
 import streamlit as st
 
-from model import (APPROACHES, MAX_UPLOAD_MB, difference, options, prepare_result,
+from model import (APPROACHES, MAX_UPLOAD_MB, YEARS, difference, find_rows, options, prepare_result,
                    read_report, release_for_app, rows_for, status)
 from repository import Repository
 from github_storage import GitHubRepository
 from publication import (EXPLORE, COMPARE, CROSSING, MOVED_IN, MOVED_OUT, public_views, shared_compare, crossing_rows, crossing_chart, map_link_data)
 from views import annual_chart, csv_bytes, delta_chart, index_chart, world_map, gap_svg, map_definitions
+from all_pathways import render_all_pathways
 
 st.set_page_config(page_title="FABLE Fair Share", page_icon="🌐", layout="wide")
 st.markdown("""
@@ -51,6 +52,13 @@ def releases():
 
 def stage_label(after):
     return "After trade" if after else "Before trade"
+
+def reporting_year(value):
+    try:
+        number = float(value)
+        return int(number) if number.is_integer() else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 def record_label(r, short=False):
     stamp = r["published_at"].replace("T"," ")[:16] + " UTC"
@@ -600,6 +608,8 @@ def overview(repo,catalogue):
         st.query_params["run"]=run_id
     run=repo.get(run_id)
     if run:
+        st.caption("Explore the selected **pathway**, **trade stage** and **published snapshot**. "
+                   "Fair Share Base/Adjusted allowances are independent of trade stage.")
         detail_view(run,"overview_")
     else:
         st.info("This result is no longer public.")
@@ -620,7 +630,10 @@ def compare(repo,catalogue):
         st.info("Publish at least two matched results to compare them.")
         return
     pool=choose_event(catalogue,"compare_event")
-    mode=st.radio("Compare",("Pathways","Trade stages","Snapshots"),horizontal=True,key="compare_mode")
+    mode=st.radio("Compare",("All pathways","Pathways","Trade stages","Snapshots"),horizontal=True,key="compare_mode")
+    if mode=="All pathways":
+        render_all_pathways(repo, pool)
+        return
     if mode=="Trade stages":
         pool_a=[a for a in pool if not a["after_trade"]]
     else:
@@ -752,10 +765,28 @@ def upload_panel(repo, catalog):
             st.error("No pathway in this report matches the selected Scenathon release.")
             return
         key=event+"_"+digest[:12]
+        # Inventory of available pathway and trade-stage combinations.
+        inventory = []
+        for entry_path in paths:
+            _, entry_stages, _ = options(report,event,pathway=entry_path)
+            for entry_stage in entry_stages:
+                matches = find_rows(report, event, entry_path, entry_stage)
+                count = sum(1 for row in matches if reporting_year(row.get("year")) in YEARS)
+                expected = len(release.weights.participant_ids) * len(YEARS)
+                inventory.append({"Pathway": entry_path, "Trade stage": stage_label(entry_stage),
+                                  "Reporting rows": count, "Expected": expected,
+                                  "Row count": "Complete" if count == expected else "Needs review"})
+        st.caption(f"Detected {len(inventory)} pathway/stage combination(s) in this upload. "
+                   "Choose one for the current preview and publication.")
+        with st.expander("Detected pathway × trade stage inventory", expanded=len(inventory) > 2):
+            st.dataframe(pd.DataFrame(inventory), hide_index=True, width="stretch")
+            st.caption("Row counts are preliminary; Validate and preview checks unique participant-year coverage.")
         path=st.selectbox("Pathway",paths,key="admin_path_"+key,
-                          help="Pathway names are read from the report to avoid mislabelling results.")
+                          help="Choose from the pathways detected in this workbook.")
         _,stages,_=options(report,event,pathway=path)
-        stage=st.radio("Trade stage",stages,format_func=stage_label,horizontal=True,key="admin_stage_"+key+path)
+        stage=st.selectbox("Trade stage",stages,format_func=stage_label,
+                           key="admin_stage_"+key+path,
+                           help="Detected from tradeadjustment/trade_adj, not guessed from filename.")
         _,_,snapshots=options(report,event,path,stage)
         snap=st.selectbox("Workbook snapshot",snapshots,key="admin_snapshot_"+key+path+str(stage)) if snapshots else None
         missing={"scenathon_id","trade_adj"}-report.fields
