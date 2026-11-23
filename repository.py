@@ -168,9 +168,9 @@ class Repository:
             row = c.execute("SELECT id FROM runs WHERE id=?", (run_id,)).fetchone()
             if row is None:
                 raise ValueError("Snapshot no longer exists.")
-            stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            c.execute("UPDATE runs SET published=1, published_at=? WHERE id=?",
-                      (stamp, run_id))
+            # Restore visibility only; retain the historical publication
+            # timestamp so an older data export does not become "Latest".
+            c.execute("UPDATE runs SET published=1 WHERE id=?", (run_id,))
 
     def delete(self, run_id):
         """Delete a stored snapshot, preserving sources referenced by other runs."""
