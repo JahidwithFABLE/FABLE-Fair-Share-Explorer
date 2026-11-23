@@ -114,12 +114,15 @@ def index_chart(run, approach, regional=False, scale="Focused"):
 
 def annual_chart(a, b=None):
     fig=go.Figure()
-    for r, label, colour in ((a, "Selected" if b is None else "A · "+a["pathway"],FIRST),
-                              (b, "B · "+(b["pathway"] if b else ""),SECOND)):
+    def label(run):
+        return run["pathway"] + (" · After trade" if run["after_trade"] else " · Before trade")
+
+    for r, legend, colour in ((a, label(a) if b is None else "A · " + label(a), FIRST),
+                              (b, "B · " + label(b) if b else "", SECOND)):
         if r is None: continue
         years=sorted(map(int,r["annual"]))
         y=[r["annual"].get(str(year),r["annual"].get(year))/1000 for year in years]
-        fig.add_scatter(x=years,y=y,name=label,mode="lines+markers",line=dict(width=3,color=colour),
+        fig.add_scatter(x=years,y=y,name=legend,mode="lines+markers",line=dict(width=3,color=colour),
                         marker=dict(size=7),hovertemplate="%{x}<br>%{y:,.2f} GtCO₂e/year<extra>%{fullData.name}</extra>")
     canvas(fig,390)
     fig.update_xaxes(title_text="Reporting year",tickmode="array",tickvals=years)
