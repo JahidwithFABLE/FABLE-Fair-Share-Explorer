@@ -915,7 +915,7 @@ def upload_panel(repo, catalog):
                         run_id, created = repo.publish(
                             title, run, file.name, file.getvalue(), visibility=visibility)
                         saved.append((run, run_id, created))
-                    except (ValueError, Exception) as exc:
+                    except Exception as exc:
                         logging.getLogger(__name__).exception(
                             "Publish failed for %s / %s", run["pathway"],
                             stage_label(run["after_trade"]))
