@@ -11,6 +11,7 @@ import math
 from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
+from database_import import database_rows
 from openpyxl.utils.exceptions import InvalidFileException
 import fair_share as engine
 
@@ -79,6 +80,12 @@ def read_report(blob: bytes) -> Report:
             files = z.infolist()
             if len(files) > 10_000 or sum(i.file_size for i in files) > MAX_UNCOMPRESSED_MB * 1024**2:
                 raise ValueError("Workbook is too large to validate. Use a smaller Scenathon Excel export.")
+        # Scenathon full database exports use different column names and may
+        # contain a very large Trade sheet. Parse only Indicators first.
+        extracted = database_rows(blob, max_rows=MAX_INDICATOR_ROWS)
+        if extracted is not None:
+            return Report("Indicators", frozenset(extracted[0]), tuple(extracted),
+                          sha256(blob).hexdigest())
         workbook = load_workbook(BytesIO(blob), read_only=True, data_only=True, keep_links=False)
     except (BadZipFile, InvalidFileException, KeyError, OSError) as err:
         raise ValueError("The upload is not a readable Scenathon .xlsx workbook.") from err
