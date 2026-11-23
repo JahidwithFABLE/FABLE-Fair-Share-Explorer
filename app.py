@@ -46,7 +46,9 @@ def init_repository(data, dsn, storage, github_repo, github_token):
         return GitHubRepository(github_repo, github_token)
     return Repository(Path(data) / "fair_share.sqlite3", dsn if storage == "postgres" else "")
 
-@st.cache_resource(show_spinner=False)
+# Rebuild the small scientific release on rerun rather than caching Benchmark
+# dataclass instances across Streamlit's module hot-reloads. Stale class
+# instances can fail fair_share.calculate's strict benchmark type check.
 def releases():
     return release_for_app()
 
