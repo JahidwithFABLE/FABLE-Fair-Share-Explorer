@@ -968,37 +968,151 @@ def upload_panel(repo, catalog):
         st.error(str(exc))
 
 def manage_panel(repo):
-    cat=repo.catalogue(private=True)
-    if not cat:
-        st.caption("There are no stored snapshots.")
+    """Review, publish/unpublish, or explicitly delete stored result snapshots."""
+    st.subheader("Snapshot history")
+    catalogue = repo.catalogue(private=True)
+    if not catalogue:
+        st.info("There are no saved snapshots.")
         return
-    choices={x["id"]:x for x in cat}
-    selected=st.selectbox("Stored snapshot",list(choices),format_func=lambda k:record_label(choices[k]),key="stored_run")
-    r=choices[selected]
-    st.caption(f"{r['title']} · {'Public' if r['published'] else 'Unpublished'}")
-    if r["published"] and st.button("Unpublish this snapshot",key="admin_unpublish"):
-        repo.hide(selected)
-        st.rerun()
-    saved = repo.get(selected, private=True)
-    if saved:
-        with st.expander("Edit public views", expanded=True):
-            settings = publication_controls(public_views(saved), "stored_" + selected + "_")
-            if st.button("Save public views", key="admin_save_views", disabled=not settings["explore"]):
-                try:
-                    repo.set_public_views(selected, settings)
-                except ValueError as exc:
-                    st.error(str(exc))
-                except Exception:
-                    logging.getLogger(__name__).exception("Could not save public views")
-                    st.error("Could not save public views. The existing publication was unchanged.")
-                else:
-                    st.success("Public views saved. No re-upload or republish needed.")
-    if getattr(repo,"public_git_archive",False):
-        st.caption("Unpublishing hides the snapshot in this app. Its workbook and results remain in public GitHub.")
-    elif getattr(repo,"github_archive",False):
-        st.caption("The source workbook remains in the GitHub archive.")
+
+    flash = st.session_state.pop("snapshot_history_notice", None)
+    if flash:
+        st.success(flash)
+
+    public_count = sum(bool(r["published"]) for r in catalogue)
+    st.caption(f"{len(catalogue)} saved snapshots · {public_count} public · "
+               f"{len(catalogue) - public_count} unpublished. "
+               "Before and After trade are always separate snapshots.")
+
+    selectors = st.columns([2, 2, 2, 2])
+    events = sorted({r["event_id"] for r in catalogue})
+    event = selectors[0].selectbox("Scenathon", ["All"] + events,
+                                  format_func=lambda k: ("All Scenathons" if k == "All" else
+                                                         next(r["title"] for r in catalogue
+                                                              if r["event_id"] == k)),
+                                  key="history_event")
+    event_rows = [r for r in catalogue if event == "All" or r["event_id"] == event]
+    paths = sorted({r["pathway"] for r in event_rows})
+    pathway = selectors[1].selectbox("Pathway", ["All"] + paths,
+                                     format_func=lambda p: "All pathways" if p == "All" else p,
+                                     key="history_pathway")
+    stages = selectors[2].selectbox("Trade stage", ("All", "Before", "After"),
+                                    format_func=lambda v: "Both stages" if v == "All" else
+                                    v + " trade", key="history_stage")
+    visibility = selectors[3].selectbox("Visibility", ("All", "Public", "Unpublished"),
+                                        format_func=lambda v: "All snapshots" if v == "All" else v,
+                                        key="history_visibility")
+
+    filtered = [r for r in event_rows
+                if (pathway == "All" or r["pathway"] == pathway)
+                and (stages == "All" or bool(r["after_trade"]) == (stages == "After"))
+                and (visibility == "All" or bool(r["published"]) == (visibility == "Public"))]
+    if not filtered:
+        st.info("No snapshots match the selected filters.")
+        return
+
+    newest = {}
+    for row in catalogue:
+        combo = (row["event_id"], row["pathway"], bool(row["after_trade"]))
+        if combo not in newest:
+            newest[combo] = row["id"]
+
+    def history_label(row):
+        combo = (row["event_id"], row["pathway"], bool(row["after_trade"]))
+        version = "Latest" if newest[combo] == row["id"] else "Older"
+        visibility_label = "Public" if row["published"] else "Unpublished"
+        stamp = row["published_at"].replace("T", " ")[:16] + " UTC"
+        return (f"{row['pathway']} · {stage_label(row['after_trade'])} · "
+                f"{stamp} · {row['id'][:6]} · {version} / {visibility_label}")
+
+    selected_items = {r["id"]: r for r in filtered}
+    selected = st.selectbox("Select stored snapshot", list(selected_items),
+                            format_func=lambda k: history_label(selected_items[k]),
+                            key="stored_run")
+    row = selected_items[selected]
+    run = repo.get(selected, private=True)
+    if run is None:
+        st.warning("This snapshot is no longer available. Refresh Snapshot history.")
+        return
+
+    latest_key = (row["event_id"], row["pathway"], bool(row["after_trade"]))
+    version_label = "Latest version" if newest[latest_key] == selected else "Older version"
+    visibility_label = "Public" if row["published"] else "Unpublished"
+    st.caption(f"**{row['pathway']} · {stage_label(row['after_trade'])}** · "
+               f"{version_label} · {visibility_label} · snapshot {row['snapshot']}")
+    with st.expander("View all stored snapshots", expanded=False):
+        st.dataframe(pd.DataFrame([
+            {"Pathway": item["pathway"],
+             "Trade stage": stage_label(item["after_trade"]),
+             "Export": item["published_at"].replace("T", " ")[:16] + " UTC",
+             "Version": "Latest" if newest[(item["event_id"], item["pathway"],
+                                             bool(item["after_trade"]))] == item["id"] else "Older",
+             "Visibility": "Public" if item["published"] else "Unpublished",
+             "ID": item["id"][:8]}
+            for item in filtered]), hide_index=True, width="stretch")
+
+    actions = st.columns([1, 1, 3])
+    if row["published"]:
+        actions[0].link_button("Open in Explore", f"?run={selected}", use_container_width=True)
+        if actions[1].button("Unpublish", key="history_unpublish",
+                             use_container_width=True):
+            try:
+                repo.hide(selected)
+            except Exception:
+                logging.getLogger(__name__).exception("Could not unpublish %s", selected)
+                st.error("Could not unpublish the selected snapshot.")
+            else:
+                st.session_state["snapshot_history_notice"] = "Snapshot unpublished; the archived result remains saved."
+                st.rerun()
     else:
-        st.caption("The source workbook remains in the private database archive.")
+        if actions[0].button("Republish", key="history_republish",
+                             use_container_width=True):
+            try:
+                repo.restore(selected)
+            except Exception:
+                logging.getLogger(__name__).exception("Could not republish %s", selected)
+                st.error("Could not republish the selected snapshot.")
+            else:
+                st.session_state["snapshot_history_notice"] = "Snapshot republished without re-uploading its Excel file."
+                st.rerun()
+    actions[2].caption("Unpublish hides a result; it does not delete its calculations or source workbook.")
+
+    with st.expander("Public charts and table settings", expanded=False):
+        settings = publication_controls(public_views(run), "stored_" + selected + "_")
+        if st.button("Save public views", key="admin_save_views",
+                     disabled=not settings["explore"]):
+            try:
+                repo.set_public_views(selected, settings)
+            except Exception:
+                logging.getLogger(__name__).exception("Could not save visibility for %s", selected)
+                st.error("Could not save public views; existing publication is unchanged.")
+            else:
+                st.success("Public views saved. No re-upload required.")
+
+    st.divider()
+    with st.expander("Danger zone · delete stored snapshot", expanded=False):
+        st.warning("Delete removes this selected result from the current app storage "
+                   "and its active GitHub app-data branch. The original workbook is "
+                   "removed only if no other saved snapshot uses it. "
+                   "GitHub's historical commits may still retain earlier copies.")
+        st.caption("This action is different from Unpublish and cannot be undone "
+                   "from the app. It does not affect the fixed Fair Share benchmark.")
+        expected = "DELETE " + selected[:6]
+        entered = st.text_input(f"Type {expected} to confirm",
+                                key="history_delete_confirm_" + selected)
+        if st.button("Delete this snapshot", key="history_delete_" + selected,
+                     disabled=entered.strip() != expected):
+            try:
+                repo.delete(selected)
+            except Exception:
+                logging.getLogger(__name__).exception("Could not delete snapshot %s", selected)
+                st.error("Deletion failed; check the repository and try again.")
+            else:
+                st.session_state.pop("stored_run", None)
+                st.session_state["snapshot_history_notice"] = (
+                    "Selected snapshot deleted from the active catalogue. "
+                    "Shared workbook sources were preserved.")
+                st.rerun()
 
 def admin(repo):
     st.subheader("Admin workspace")
