@@ -187,6 +187,20 @@ class Repository:
             if remaining is None:
                 c.execute("DELETE FROM sources WHERE report_hash=?", (digest,))
 
+    def source_info(self, run_id):
+        """Return source filename and number of dependent snapshots."""
+        with self.connect() as c:
+            row = c.execute(
+                "SELECT s.filename, r.report_hash FROM runs r "
+                "JOIN sources s ON s.report_hash=r.report_hash WHERE r.id=?",
+                (run_id,)).fetchone()
+            if row is None:
+                return None
+            used = c.execute("SELECT COUNT(*) AS n FROM runs WHERE report_hash=?",
+                             (row["report_hash"],)).fetchone()["n"]
+        return {"filename": row["filename"], "used_by": used,
+                "digest": row["report_hash"]}
+
     def source(self, run_id):
         with self.connect() as c:
             row = c.execute("SELECT s.filename,s.raw FROM runs r JOIN sources s ON s.report_hash=r.report_hash WHERE r.id=?",
