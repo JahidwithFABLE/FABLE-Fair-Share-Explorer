@@ -724,114 +724,220 @@ def authenticated():
     return False
 
 def upload_panel(repo, catalog):
+    """Validate and publish one or both detected trade stages from one upload.
+
+    Each pathway/stage produces a separate immutable Fair Share snapshot.
+    The GitHub repository content-addresses the workbook: its unchanged Excel
+    bytes are archived once and shared by all results from this export.
+    """
     titles = repo.titles()
-    events=list(catalog)
-    event=st.selectbox("Scenathon release",events,
-                       format_func=lambda e:f"{titles.get(e,catalog[e].label)} · ID {e}",key="admin_event")
-    release=catalog[event]
-    title=st.text_input("Scenathon display name",value=titles.get(event,release.label),
-                        max_chars=110,key="admin_title_"+event)
-    st.caption(f"Fixed benchmark {release.benchmark.version} · {len(release.weights.participant_ids)} participants")
-    file=st.file_uploader("Scenathon report or database export (.xlsx)",type=["xlsx"],max_upload_size=getattr(repo,"max_upload_mib",MAX_UPLOAD_MB),key="admin_book",
-                          help="Supports original Scenathon reports and full database exports. Reads the Indicators sheet only; Trade is never needed for Fair Share.")
+    events = list(catalog)
+    event = st.selectbox("Scenathon release", events,
+                         format_func=lambda e: f"{titles.get(e, catalog[e].label)} · ID {e}",
+                         key="admin_event")
+    release = catalog[event]
+    title = st.text_input("Scenathon display name",
+                          value=titles.get(event, release.label), max_chars=110,
+                          key="admin_title_" + event)
+    st.caption(f"Fixed benchmark {release.benchmark.version} · "
+               f"{len(release.weights.participant_ids)} participants")
+
+    file = st.file_uploader(
+        "Scenathon report or database export (.xlsx)", type=["xlsx"],
+        max_upload_size=getattr(repo, "max_upload_mib", MAX_UPLOAD_MB),
+        key="admin_book",
+        help="Upload a report or the full database. Only Indicators is used. "
+             "Both trade stages can be published from the same workbook.")
     if file is None:
-        st.session_state.pop("upload_cache",None)
-        st.session_state.pop("checked_preview",None)
-        st.info("Upload a Scenathon report or full database export. The app identifies available pathways and trade stages from its Indicators sheet.")
+        st.session_state.pop("upload_cache", None)
+        st.session_state.pop("checked_preview", None)
+        st.info("Upload one Scenathon database export to publish its available "
+                "Before trade and After trade results.")
         return
-    # Streamlit keeps a stable upload ID across widget reruns. Read the workbook
-    # bytes only on first selection and when publishing the original.
+
     upload_id = getattr(file, "file_id", None)
     if upload_id is None:
         upload_id = sha256(file.getvalue()).hexdigest()
-    cached=st.session_state.get("upload_cache")
-    if not cached or cached[0]!=upload_id:
-        st.session_state.pop("checked_preview",None)
+    cached = st.session_state.get("upload_cache")
+    if not cached or cached[0] != upload_id:
+        st.session_state.pop("checked_preview", None)
         with st.spinner("Extracting Scenathon Indicators…"):
             try:
-                report=read_report(file.getvalue())
+                report = read_report(file.getvalue())
             except ValueError as exc:
                 st.error(str(exc))
                 return
             except Exception:
                 logging.getLogger(__name__).exception("Workbook read failed")
-                st.error("The Indicators sheet could not be read. Export a fresh .xlsx workbook and try again.")
+                st.error("The Indicators sheet could not be read. "
+                         "Export a fresh .xlsx workbook and try again.")
                 return
-        st.session_state["upload_cache"]=(upload_id,report)
+        st.session_state["upload_cache"] = (upload_id, report)
     else:
-        report=cached[1]
-    digest=report.digest
+        report = cached[1]
+
+    digest = report.digest
     try:
-        paths,_,_=options(report,event)
+        paths, _, _ = options(report, event)
         if not paths:
             st.error("No pathway in this report matches the selected Scenathon release.")
             return
-        key=event+"_"+digest[:12]
-        # Inventory of available pathway and trade-stage combinations.
+        key = event + "_" + digest[:12]
+        expected = len(release.weights.participant_ids) * len(YEARS)
+        detected_stages = "trade_adj" in report.fields
+
         inventory = []
-        for entry_path in paths:
-            _, entry_stages, _ = options(report,event,pathway=entry_path)
-            for entry_stage in entry_stages:
-                matches = find_rows(report, event, entry_path, entry_stage)
-                count = sum(1 for row in matches if reporting_year(row.get("year")) in YEARS)
-                expected = len(release.weights.participant_ids) * len(YEARS)
-                inventory.append({"Pathway": entry_path, "Trade stage": stage_label(entry_stage),
-                                  "Reporting rows": count, "Expected": expected,
-                                  "Row count": "Complete" if count == expected else "Needs review"})
-        st.caption(f"Detected {len(inventory)} pathway/stage combination(s) in this upload. "
-                   "Choose one for the current preview and publication.")
-        with st.expander("Detected pathway × trade stage inventory", expanded=len(inventory) > 2):
-            st.dataframe(pd.DataFrame(inventory), hide_index=True, width="stretch")
-            st.caption("Row counts are preliminary; Validate and preview checks unique participant-year coverage.")
-        path=st.selectbox("Pathway",paths,key="admin_path_"+key,
-                          help="Choose from the pathways detected in this workbook.")
-        _,stages,_=options(report,event,pathway=path)
-        stage=st.selectbox("Trade stage",stages,format_func=stage_label,
-                           key="admin_stage_"+key+path,
-                           help="Detected from tradeadjustment/trade_adj, not guessed from filename.")
-        _,_,snapshots=options(report,event,path,stage)
-        snap=st.selectbox("Workbook snapshot",snapshots,key="admin_snapshot_"+key+path+str(stage)) if snapshots else None
-        missing={"scenathon_id","trade_adj"}-report.fields
-        confirmed=False
-        if missing:
-            st.warning("Source metadata missing: "+", ".join(sorted(missing))+". Confirm that this database/report export belongs to the selected Scenathon and trade stage before calculating.")
-            confirmed=st.checkbox("I verified that this report matches the selected Scenathon and trade stage.",
-                                  key="admin_confirm_"+key+path+str(stage))
-        selection=(digest,event,path,stage,snap,confirmed,release.fingerprint)
-        if st.button("Validate and preview",type="primary",key="admin_validate",disabled=bool(missing and not confirmed)):
-            st.session_state.pop("checked_preview",None)
-            try:
-                checked=prepare_result(report,release,event,path,stage,snap,confirmed)
-            except ValueError as exc:
-                st.error(str(exc))
+        for detected_path in paths:
+            _, found, _ = options(report, event, pathway=detected_path)
+            if detected_stages:
+                for detected_stage in found:
+                    matches = find_rows(report, event, detected_path, detected_stage)
+                    count = sum(1 for row in matches
+                                if reporting_year(row.get("year")) in YEARS)
+                    inventory.append({"Pathway": detected_path,
+                                      "Trade stage": stage_label(detected_stage),
+                                      "Reporting rows": count,
+                                      "Expected": expected,
+                                      "Pre-check": "Complete" if count == expected else "Needs validation"})
             else:
-                st.session_state["checked_preview"]=(selection,checked)
-        preview=st.session_state.get("checked_preview")
-        if preview and preview[0]==selection:
-            run=preview[1]
-            st.success(f"Private preview · {run['reporting_rows']} validated rows. The result is not public until you publish it.")
-            if getattr(repo,"public_git_archive",False):
-                st.caption("Publish also commits the original workbook and calculated results to public GitHub. "
-                           "Public-view settings only control what is shown in this app.")
-            with st.expander("Choose what to publish", expanded=True):
-                visible = publication_controls(public_views(run), "draft_" + digest[:10] + "_")
-                if not visible["explore"]:
-                    st.info("Select at least one Explore view before publishing.")
-            if st.button("Publish to public dashboard",type="primary",key="admin_publish",
-                         disabled=not title.strip() or not visible["explore"]):
-                try:
-                    with st.spinner("Saving the results and original workbook…"):
-                        run_id,created=repo.publish(title,run,file.name,file.getvalue(),visibility=visible)
-                except ValueError as exc:
-                    st.error(str(exc))
-                except Exception:
-                    logging.getLogger(__name__).exception("Publish transaction failed")
-                    st.error("Publishing failed. The preview is still available. Check the app database and try again.")
-                else:
-                    st.success("Published successfully." if created else "This exact run is already recorded and is now public.")
-                    st.link_button("Open public result",f"?run={run_id}")
-            preview_run = {**run, "public_views": {**visible, "explore": list(EXPLORE)}}
-            detail_view(preview_run,"preview_",allow_download=False)
+                inventory.append({"Pathway": detected_path, "Trade stage": "Unknown (manual)",
+                                  "Reporting rows": None, "Expected": expected,
+                                  "Pre-check": "Confirm trade stage"})
+
+        st.caption(f"{len(inventory)} pathway/stage selection(s) detected in the workbook. "
+                   "Each selected trade stage is calculated and published separately.")
+        with st.expander("Detected pathway and trade stages", expanded=len(inventory) > 2):
+            st.dataframe(pd.DataFrame(inventory), hide_index=True, width="stretch")
+            st.caption("Pre-check counts are informational. Full validation checks "
+                       "every participant and reporting year, with no duplicate rows.")
+
+        path = st.selectbox("Pathway to publish", paths, key="admin_path_" + key,
+                            help="Choose a pathway detected in the uploaded Indicators sheet.")
+        _, available, _ = options(report, event, pathway=path)
+        if detected_stages:
+            stages = st.multiselect(
+                "Trade stages to publish", available, default=available,
+                format_func=stage_label, key="admin_stages_" + key + path,
+                help="Select Before trade, After trade, or both. "
+                     "Stage values come from the Excel data, not from its filename.")
+        else:
+            stage = st.selectbox(
+                "Trade stage (manual verification)", (False, True), format_func=stage_label,
+                key="admin_manual_stage_" + key + path,
+                help="This workbook has no trade adjustment field. "
+                     "Only one manually verified stage can be published at a time.")
+            stages = [stage]
+            st.info("The workbook does not identify its trade stage. "
+                    "Choose the correct stage manually; publishing both from "
+                    "the same unlabelled rows is disabled.")
+
+        snapshot_by_stage = {}
+        for stage in stages:
+            _, _, snaps = options(report, event, pathway=path, stage=stage)
+            if len(snaps) > 1:
+                snapshot_by_stage[stage] = st.selectbox(
+                    f"Workbook snapshot · {stage_label(stage)}", snaps,
+                    key="admin_snapshot_" + key + path + str(stage))
+            else:
+                snapshot_by_stage[stage] = snaps[0] if snaps else None
+
+        missing = {"scenathon_id", "trade_adj"} - report.fields
+        confirmed = not missing
+        if missing:
+            st.warning("Source metadata missing: " + ", ".join(sorted(missing)) +
+                       ". Confirm that this export belongs to the selected Scenathon"
+                       " and that its trade-stage labels are correct.")
+            confirmed = st.checkbox(
+                "I verified the Scenathon and trade-stage information for this export.",
+                key="admin_confirm_" + key + path)
+
+        stage_selection = tuple((stage, snapshot_by_stage[stage]) for stage in stages)
+        selection = (digest, event, path, stage_selection, confirmed, release.fingerprint)
+        can_validate = bool(stages) and confirmed
+        validate_label = f"Validate {len(stages)} selected trade stage(s)"
+        if st.button(validate_label, type="primary", key="admin_validate",
+                     disabled=not can_validate):
+            st.session_state.pop("checked_preview", None)
+            validated = []
+            errors = []
+            with st.spinner("Calculating Fair Share for the selected stage(s)…"):
+                for stage, snap in stage_selection:
+                    try:
+                        validated.append(prepare_result(
+                            report, release, event, path, stage, snap, confirmed))
+                    except ValueError as exc:
+                        errors.append(f"{stage_label(stage)}: {exc}")
+                    except Exception:
+                        logging.getLogger(__name__).exception(
+                            "Failed to prepare Fair Share for %s / %s", path, stage)
+                        errors.append(f"{stage_label(stage)}: unexpected calculation error.")
+            if errors:
+                st.error("No stages were published. Validation failed for: "
+                         + " | ".join(errors))
+            else:
+                st.session_state["checked_preview"] = (selection, validated)
+                st.success(f"Both stages validated." if len(validated) == 2
+                           else "Selected stage validated.")
+
+        preview = st.session_state.get("checked_preview")
+        if not (preview and preview[0] == selection):
+            return
+        validated = preview[1]
+        if not isinstance(validated, (list, tuple)):
+            return
+        st.success(f"Private preview · {len(validated)} independently validated "
+                   "stage(s). Nothing is public until you publish.")
+        st.dataframe(pd.DataFrame([
+            {"Pathway": run["pathway"], "Trade stage": stage_label(run["after_trade"]),
+             "Validated rows": run["reporting_rows"],
+             "Net AFOLU (GtCO₂e)": run["cumulative"] / 1000,
+             "Fixed budget (GtCO₂e)": run["budget"] / 1000}
+            for run in validated]), hide_index=True, width="stretch")
+        if getattr(repo, "public_git_archive", False):
+            st.caption("Publishing stores the exact original workbook in public GitHub. "
+                       "One original is reused across its stage-specific results.")
+
+        with st.expander("Public Explore and Compare views", expanded=True):
+            visibility = publication_controls(
+                public_views(validated[0]), "draft_" + digest[:10] + "_")
+            if not visibility["explore"]:
+                st.info("Select at least one public Explore view to publish.")
+
+        count = len(validated)
+        if st.button(f"Publish {count} selected stage(s)", type="primary",
+                     key="admin_publish",
+                     disabled=not title.strip() or not visibility["explore"]):
+            saved = []
+            error = None
+            with st.spinner("Publishing each validated stage and archiving the workbook…"):
+                for run in validated:
+                    try:
+                        run_id, created = repo.publish(
+                            title, run, file.name, file.getvalue(), visibility=visibility)
+                        saved.append((run, run_id, created))
+                    except (ValueError, Exception) as exc:
+                        logging.getLogger(__name__).exception(
+                            "Publish failed for %s / %s", run["pathway"],
+                            stage_label(run["after_trade"]))
+                        error = f"{stage_label(run['after_trade'])}: {exc}"
+                        break
+            if error:
+                st.error(f"Published {len(saved)} of {count} stage(s). {error}. "
+                         "Successful publications are retained. Retry to finish the remainder.")
+            else:
+                st.success(f"Published {len(saved)} stage(s) separately. "
+                           "Use Explore → Pathway → Trade stage to switch between them.")
+            for run, run_id, created in saved:
+                st.link_button(f"Open {stage_label(run['after_trade'])} in Explore",
+                               f"?run={run_id}")
+
+        preview_index = st.selectbox(
+            "Inspect the private preview", range(len(validated)),
+            format_func=lambda i: stage_label(validated[i]["after_trade"]),
+            key="admin_preview_stage_" + key + path)
+        preview_run = {**validated[preview_index],
+                       "public_views": {**visibility, "explore": list(EXPLORE)}}
+        detail_view(preview_run, "preview_", allow_download=False)
     except ValueError as exc:
         st.error(str(exc))
 
