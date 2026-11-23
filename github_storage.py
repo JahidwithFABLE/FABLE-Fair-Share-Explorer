@@ -355,7 +355,8 @@ class GitHubRepository:
             if row["published"]:
                 return [], None, False
             row["published"] = 1
-            row["published_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            # Preserve its original timestamp: restoring an old export does
+            # not make its scientific data the newest submitted version.
             return [], None, True
 
         self._change(update, "Republish existing Fair Share snapshot " + run_id)
