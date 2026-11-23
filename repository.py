@@ -163,6 +163,30 @@ class Repository:
         with self.connect() as c:
             c.execute("UPDATE runs SET published=0 WHERE id=?", (run_id,))
 
+    def restore(self, run_id):
+        with self.connect() as c:
+            row = c.execute("SELECT id FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise ValueError("Snapshot no longer exists.")
+            stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            c.execute("UPDATE runs SET published=1, published_at=? WHERE id=?",
+                      (stamp, run_id))
+
+    def delete(self, run_id):
+        """Delete a stored snapshot, preserving sources referenced by other runs."""
+        with self.connect() as c:
+            if not c.pg:
+                c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT report_hash FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise ValueError("Snapshot no longer exists.")
+            digest = row["report_hash"]
+            c.execute("DELETE FROM runs WHERE id=?", (run_id,))
+            remaining = c.execute("SELECT 1 FROM runs WHERE report_hash=? LIMIT 1",
+                                  (digest,)).fetchone()
+            if remaining is None:
+                c.execute("DELETE FROM sources WHERE report_hash=?", (digest,))
+
     def source(self, run_id):
         with self.connect() as c:
             row = c.execute("SELECT s.filename,s.raw FROM runs r JOIN sources s ON s.report_hash=r.report_hash WHERE r.id=?",
