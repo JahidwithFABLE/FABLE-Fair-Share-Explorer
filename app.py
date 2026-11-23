@@ -847,14 +847,18 @@ def upload_panel(repo, catalog):
             st.warning("Source metadata missing: " + ", ".join(sorted(missing)) +
                        ". Confirm that this export belongs to the selected Scenathon"
                        " and that its trade-stage labels are correct.")
+            confirmation_key = "admin_confirm_" + key + path
+            if not detected_stages:
+                confirmation_key += "_" + str(stages[0])
             confirmed = st.checkbox(
                 "I verified the Scenathon and trade-stage information for this export.",
-                key="admin_confirm_" + key + path)
+                key=confirmation_key)
 
         stage_selection = tuple((stage, snapshot_by_stage[stage]) for stage in stages)
         selection = (digest, event, path, stage_selection, confirmed, release.fingerprint)
         can_validate = bool(stages) and confirmed
-        validate_label = f"Validate {len(stages)} selected trade stage(s)"
+        validate_label = ("Validate both trade stages" if len(stages) == 2
+                          else "Validate selected trade stage")
         if st.button(validate_label, type="primary", key="admin_validate",
                      disabled=not can_validate):
             st.session_state.pop("checked_preview", None)
@@ -904,7 +908,9 @@ def upload_panel(repo, catalog):
                 st.info("Select at least one public Explore view to publish.")
 
         count = len(validated)
-        if st.button(f"Publish {count} selected stage(s)", type="primary",
+        publish_label = ("Publish both trade stages" if count == 2
+                         else "Publish selected trade stage")
+        if st.button(publish_label, type="primary",
                      key="admin_publish",
                      disabled=not title.strip() or not visibility["explore"]):
             saved = []
