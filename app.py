@@ -632,7 +632,17 @@ def compare(repo,catalogue):
         st.info("Publish at least two matched results to compare them.")
         return
     pool=choose_event(catalogue,"compare_event")
-    mode=st.radio("Compare",("All pathways","Pathways","Trade stages","Snapshots"),horizontal=True,key="compare_mode")
+    st.caption("Choose whether to compare all published pathways, two pathways, "
+               "Before/After trade, or two historical snapshots.")
+    mode=st.radio("Comparison type",
+                  ("All pathways","Pathways","Trade stages","Snapshots"),
+                  horizontal=True, key="compare_mode",
+                  format_func=lambda value: {
+                      "All pathways": "All pathways",
+                      "Pathways": "Two pathways",
+                      "Trade stages": "Before vs After trade",
+                      "Snapshots": "Snapshot versions",
+                  }[value])
     if mode=="All pathways":
         render_all_pathways(repo, pool)
         return
@@ -649,9 +659,11 @@ def compare(repo,catalogue):
     c1,c2=st.columns(2)
     labels=lambda r:record_label(r)
     default_a=next((k for k,r in valid.items() if r["pathway"].casefold()=="current trends"),next(iter(valid)))
-    a_id=c1.selectbox("A · Reference run",list(valid),index=list(valid).index(default_a),format_func=lambda k:labels(valid[k]),key="compare_a_"+mode)
+    a_id=c1.selectbox("A · Reference snapshot",list(valid),index=list(valid).index(default_a),
+                      format_func=lambda k:labels(valid[k]),key="compare_a_"+mode)
     choices={b["id"]:b for b in pool if compatible(valid[a_id],b,mode)}
-    b_id=c2.selectbox("B · Comparison run",list(choices),format_func=lambda k:labels(choices[k]),key="compare_b_"+a_id)
+    b_id=c2.selectbox("B · Comparison snapshot",list(choices),
+                      format_func=lambda k:labels(choices[k]),key="compare_b_"+a_id)
     a,b=repo.get_pair(a_id,b_id)
     if a is None or b is None:
         st.info("A selected result is no longer public.")
@@ -660,6 +672,8 @@ def compare(repo,catalogue):
     if not available:
         st.info("These snapshots have no public Compare views in common. Choose another pair.")
         return
+    st.caption(f"**A:** {selection_line(a)}  |  **B:** {selection_line(b)}. "
+               "Both use identical released Fair Share allowances.")
     approach,variant=method_select("compare_")
     try:
         rows=difference(a,b,approach,variant)
@@ -667,15 +681,21 @@ def compare(repo,catalogue):
         st.warning(str(e))
         return
     metric=st.columns(3)
-    metric[0].metric("Change in cumulative net AFOLU",f"{(b['cumulative']-a['cumulative'])/1000:+,.2f} GtCO₂e")
-    y=str(a["period"][1])
-    metric[1].metric(f"Change in {y} annual net AFOLU",f"{(b['annual'][y]-a['annual'][y])/1000:+,.2f} GtCO₂e/yr")
-    metric[2].metric("Participants changing status",sum(r["status_left"]!=r["status_right"] for r in rows))
-    st.caption("Changes are B minus A. Both runs use the same fixed allowances. A positive gap change means emissions moved down relative to the allowance.")
+    metric[0].metric("Change in cumulative net AFOLU",
+                     f"{(b['cumulative']-a['cumulative'])/1000:+,.2f} GtCO₂e")
+    metric[1].metric("Participants changing status",
+                     sum(r["status_left"] != r["status_right"] for r in rows))
+    above_a = sum(r["status_left"] == "Above allowance" for r in rows)
+    above_b = sum(r["status_right"] == "Above allowance" for r in rows)
+    metric[2].metric("Above allowance · A → B", f"{above_a} → {above_b}")
+    st.caption("All changes are B minus A. Status counts depend on the selected "
+               "approach and Base/Adjusted allowance variant; changing that variant "
+               "can change the crossing count. Negative signed gap = above allowance.")
     if st.session_state.get("compare_view") not in available:
         st.session_state.pop("compare_view", None)
-    page=st.radio("Comparison view",available,
-                  horizontal=True,key="compare_view",label_visibility="collapsed")
+    page=st.selectbox("Comparison visualisation", available, key="compare_view",
+                      help="Choose a table, change plot, maps, annual trend, "
+                           "or participants crossing their fixed allowance.")
     if page=="Change table":
         names={"participant":"Participant","left_emissions":"A emissions","right_emissions":"B emissions",
                "delta_emissions":"Δ emissions","allowance":"Fixed allowance","left_gap":"A gap",
