@@ -56,7 +56,7 @@ def gap_comparison(runs, approach, variant, participant):
         maximum = max(abs(x) for row in gaps for x in row) or 1
         fig.add_trace(go.Heatmap(
             x=participants, y=[run_label(run) for run in runs], z=gaps,
-            zmin=-maximum, zmax=maximum, zmid=0, colorscale="RdBu", reversescale=True,
+            zmin=-maximum, zmax=maximum, zmid=0, colorscale="RdBu",
             colorbar=dict(title="MtCO₂e"),
             hovertemplate="%{y}<br>%{x}<br>Signed gap %{z:+,.2f} MtCO₂e<extra></extra>"))
         canvas(fig, max(375, 65 * len(runs) + 180))
