@@ -717,12 +717,12 @@ def upload_panel(repo, catalog):
     title=st.text_input("Scenathon display name",value=titles.get(event,release.label),
                         max_chars=110,key="admin_title_"+event)
     st.caption(f"Fixed benchmark {release.benchmark.version} · {len(release.weights.participant_ids)} participants")
-    file=st.file_uploader("Scenathon report (.xlsx)",type=["xlsx"],max_upload_size=getattr(repo,"max_upload_mib",MAX_UPLOAD_MB),key="admin_book",
-                          help="The app reads Indicators or Indicators Report. It does not use the Trade sheet.")
+    file=st.file_uploader("Scenathon report or database export (.xlsx)",type=["xlsx"],max_upload_size=getattr(repo,"max_upload_mib",MAX_UPLOAD_MB),key="admin_book",
+                          help="Supports original Scenathon reports and full database exports. Reads the Indicators sheet only; Trade is never needed for Fair Share.")
     if file is None:
         st.session_state.pop("upload_cache",None)
         st.session_state.pop("checked_preview",None)
-        st.info("Upload the exported workbook to select the pathway and trade stage.")
+        st.info("Upload a Scenathon report or full database export. The app identifies available pathways and trade stages from its Indicators sheet.")
         return
     # Streamlit keeps a stable upload ID across widget reruns. Read the workbook
     # bytes only on first selection and when publishing the original.
@@ -732,7 +732,7 @@ def upload_panel(repo, catalog):
     cached=st.session_state.get("upload_cache")
     if not cached or cached[0]!=upload_id:
         st.session_state.pop("checked_preview",None)
-        with st.spinner("Reading the Indicators sheet…"):
+        with st.spinner("Extracting Scenathon Indicators…")
             try:
                 report=read_report(file.getvalue())
             except ValueError as exc:
@@ -761,7 +761,7 @@ def upload_panel(repo, catalog):
         missing={"scenathon_id","trade_adj"}-report.fields
         confirmed=False
         if missing:
-            st.warning("Workbook metadata missing: "+", ".join(sorted(missing))+". Verify the selected export against Scenathon.")
+            st.warning("Source metadata missing: "+", ".join(sorted(missing))+". Confirm that this database/report export belongs to the selected Scenathon and trade stage before calculating.")
             confirmed=st.checkbox("I verified that this report matches the selected Scenathon and trade stage.",
                                   key="admin_confirm_"+key+path+str(stage))
         selection=(digest,event,path,stage,snap,confirmed,release.fingerprint)
