@@ -732,7 +732,7 @@ def upload_panel(repo, catalog):
     cached=st.session_state.get("upload_cache")
     if not cached or cached[0]!=upload_id:
         st.session_state.pop("checked_preview",None)
-        with st.spinner("Extracting Scenathon Indicators…")
+        with st.spinner("Extracting Scenathon Indicators…"):
             try:
                 report=read_report(file.getvalue())
             except ValueError as exc:
