@@ -247,6 +247,18 @@ class GitHubRepository:
         head, index = self._current()
         return self._get(head, index, a_id), self._get(head, index, b_id)
 
+    def source_info(self, run_id):
+        """Source filename and usage count without downloading the large Excel blob."""
+        _, index = self._current()
+        row = index["runs"].get(run_id)
+        if row is None:
+            return None
+        digest = row["report_hash"]
+        return {"filename": index["sources"].get(digest, "(missing source)"),
+                "used_by": sum(other["report_hash"] == digest
+                               for other in index["runs"].values()),
+                "digest": digest}
+
     def source(self, run_id):
         head, index = self._current()
         row = index["runs"].get(run_id)
