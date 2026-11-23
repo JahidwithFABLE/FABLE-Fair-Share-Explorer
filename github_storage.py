@@ -333,3 +333,41 @@ class GitHubRepository:
             return [], None, True
 
         self._change(update, "Hide Fair Share snapshot from app")
+
+    def restore(self, run_id):
+        """Make an existing unpublished snapshot visible again without re-uploading."""
+        def update(index):
+            row = index["runs"].get(run_id)
+            if row is None:
+                raise ValueError("Snapshot no longer exists.")
+            if row["published"]:
+                return [], None, False
+            row["published"] = 1
+            row["published_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            return [], None, True
+
+        self._change(update, "Republish existing Fair Share snapshot " + run_id)
+
+    def delete(self, run_id):
+        """Delete one stored result, and its workbook only when no runs refer to it.
+
+        The deletion affects the current Git tree, not historical Git commits.
+        """
+        def update(index):
+            row = index["runs"].get(run_id)
+            if row is None:
+                raise ValueError("Snapshot no longer exists.")
+            digest = row["report_hash"]
+            del index["runs"][run_id]
+            entries = [{"path": _run_path(run_id), "mode": "100644",
+                        "type": "blob", "sha": None}]
+            # Before and After trade can share one archived workbook. Never
+            # delete its source while any other published/unpublished run needs it.
+            if not any(other["report_hash"] == digest for other in index["runs"].values()):
+                if digest in index["sources"]:
+                    del index["sources"][digest]
+                    entries.append({"path": _source_path(digest), "mode": "100644",
+                                    "type": "blob", "sha": None})
+            return entries, None, True
+
+        self._change(update, "Delete Fair Share snapshot " + run_id)
