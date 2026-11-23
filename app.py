@@ -605,7 +605,10 @@ def overview(repo,catalogue):
     by_id={r["id"]:r for r in current if r["after_trade"]==stage}
     ids=list(by_id)
     run_id=filters[3].selectbox("Published snapshot",ids,index=ids.index(query) if query in ids else 0,
-        format_func=lambda k:record_label(by_id[k],True),key=f"explore_snap_{event}_{pathway}_{stage}")
+        format_func=lambda k:("Latest · " if k == ids[0] else "Older · ") +
+                             by_id[k]["published_at"].replace("T", " ")[:16] + " UTC · " + k[:6],
+        key=f"explore_snap_{event}_{pathway}_{stage}",
+        help="Newest published version first. Older exports remain available until deleted in Admin.")
     if run_id!=query:
         st.query_params["run"]=run_id
     run=repo.get(run_id)
@@ -1034,6 +1037,12 @@ def manage_panel(repo):
     if run is None:
         st.warning("This snapshot is no longer available. Refresh Snapshot history.")
         return
+    source_info = repo.source_info(selected)
+    if source_info:
+        st.text("Original Excel: " + source_info["filename"])
+        st.caption(f"Stored source is shared by {source_info['used_by']} snapshot(s). "
+                   "The source is removed from current storage only when its last "
+                   "dependent snapshot is deleted.")
 
     latest_key = (row["event_id"], row["pathway"], bool(row["after_trade"]))
     version_label = "Latest version" if newest[latest_key] == selected else "Older version"
